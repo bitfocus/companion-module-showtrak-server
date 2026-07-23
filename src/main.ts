@@ -106,15 +106,19 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		})
 		this.control.on('error', (message) => this.log('warn', `Control API: ${message}`))
 		this.control.on('clientsChanged', () => {
-			// Client set may have changed → (re)declare per-client variables, then
-			// refresh values and the tile feedbacks that read status/label by slug.
+			// Client and group sets arrive together → (re)declare per-client and
+			// per-group variables, then refresh values and the tile feedbacks that
+			// read status/label by slug.
 			this.updateVariableDefinitions()
 			RefreshVariableValues(this)
 			// Client status also rolls up into the group/tag/all aggregate tiles.
 			this.checkFeedbacks('client_status', 'group_status', 'tag_status', 'all_status')
 		})
 		this.control.on('tagsChanged', () => {
-			// A tag's membership (Scope) may have changed → refresh the tag tiles.
+			// A tag's membership (Scope) may have changed → (re)declare per-tag
+			// variables, refresh their values, then repaint the tag tiles.
+			this.updateVariableDefinitions()
+			RefreshVariableValues(this)
 			this.checkFeedbacks('tag_status')
 		})
 		this.control.on('modeChanged', () => {

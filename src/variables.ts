@@ -1,13 +1,18 @@
 import type { CompanionVariableDefinitions } from '@companion-module/base'
 import type ModuleInstance from './main.js'
 
-// Static variables plus an open-ended set of per-entity variables keyed by slug
-// (client_<slug>_status / client_<slug>_label), declared dynamically as entities
-// appear. "Entity" here means any addressable target — real clients, monitoring
+// Static variables plus an open-ended set of per-entity variables keyed by slug,
+// declared dynamically as entities appear:
+//   client_<slug>_status / client_<slug>_label
+//   group_<slug>_status  / group_<slug>_label
+//   tag_<slug>_status    / tag_<slug>_label
+// For clients, "entity" means any addressable target — real clients, monitoring
 // targets and dummy clients all share one slug namespace and are surfaced through
 // the SDK client list, so they all get status/label vars and feed the summary
-// counts. The `client_` prefix is kept for every type so variable ids stay stable.
-// The index signature admits those dynamic names.
+// counts. The `client_` prefix is kept for every such type so ids stay stable.
+// Groups and tags are separate slug namespaces with their own prefixes. Group and
+// tag status/label mirror the group_status / tag_status feedbacks. The index
+// signature admits all these dynamic names.
 export type VariablesSchema = {
 	connection_state: string
 	mode: string
@@ -20,11 +25,11 @@ export type VariablesSchema = {
 
 // Companion variable ids must be [a-zA-Z0-9_-]; slugs already satisfy this
 // (SLUG_PATTERN is [A-Za-z0-9_-]), so they drop in unchanged.
-function statusVar(slug: string): string {
-	return `client_${slug}_status`
+function statusVar(prefix: string, slug: string): string {
+	return `${prefix}_${slug}_status`
 }
-function labelVar(slug: string): string {
-	return `client_${slug}_label`
+function labelVar(prefix: string, slug: string): string {
+	return `${prefix}_${slug}_label`
 }
 
 // Human-readable entity-type word for a variable's display name.
@@ -47,8 +52,18 @@ export function UpdateVariableDefinitions(self: ModuleInstance): void {
 	for (const client of self.control.getAllClients()) {
 		if (!client.Slug) continue
 		const kind = typeLabel(client.Type)
-		defs[statusVar(client.Slug)] = { name: `${kind} "${client.Slug}" status` }
-		defs[labelVar(client.Slug)] = { name: `${kind} "${client.Slug}" label` }
+		defs[statusVar('client', client.Slug)] = { name: `${kind} "${client.Slug}" status` }
+		defs[labelVar('client', client.Slug)] = { name: `${kind} "${client.Slug}" label` }
+	}
+	for (const group of self.control.getGroups()) {
+		if (!group.Slug) continue
+		defs[statusVar('group', group.Slug)] = { name: `Group "${group.Slug}" status` }
+		defs[labelVar('group', group.Slug)] = { name: `Group "${group.Slug}" label` }
+	}
+	for (const tag of self.control.getTags()) {
+		if (!tag.Slug) continue
+		defs[statusVar('tag', tag.Slug)] = { name: `Tag "${tag.Slug}" status` }
+		defs[labelVar('tag', tag.Slug)] = { name: `Tag "${tag.Slug}" label` }
 	}
 	self.setVariableDefinitions(defs)
 }
@@ -65,8 +80,18 @@ export function RefreshVariableValues(self: ModuleInstance): void {
 		if (status === 'ONLINE') online++
 		else if (status === 'DEGRADED') degraded++
 		else if (status === 'OFFLINE') offline++
-		values[statusVar(client.Slug)] = status
-		values[labelVar(client.Slug)] = self.control.getClientLabel(client.Slug) ?? client.Slug
+		values[statusVar('client', client.Slug)] = status
+		values[labelVar('client', client.Slug)] = self.control.getClientLabel(client.Slug) ?? client.Slug
+	}
+	for (const group of self.control.getGroups()) {
+		if (!group.Slug) continue
+		values[statusVar('group', group.Slug)] = self.control.getGroupStatus(group.Slug) ?? 'OFFLINE'
+		values[labelVar('group', group.Slug)] = group.Title ?? group.Slug
+	}
+	for (const tag of self.control.getTags()) {
+		if (!tag.Slug) continue
+		values[statusVar('tag', tag.Slug)] = self.control.getTagStatus(tag.Slug) ?? 'OFFLINE'
+		values[labelVar('tag', tag.Slug)] = tag.Slug
 	}
 	values.connection_state = self.control.getState()
 	values.mode = self.control.getMode()

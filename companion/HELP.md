@@ -26,38 +26,95 @@ Everything is addressed by **slug**, never internal UUIDs:
 - **Scripts** — the script slug (its folder ID in the Script Manager).
 - **Events** — the integrated action ID declared by an integrated (SDK) client.
 
+Actions that take a slug also accept a `$(variable)`, so a preset's button-local
+`slug` can drive every action and feedback on the button.
+
+## Actions
+
+Every action below with a target takes a **slug**. WOL, Script, Event and both
+Shutdown actions have a **Require press-to-confirm** option — when on, the first
+press arms the button and a second press within 5 seconds runs it.
+
+**Wake-on-LAN**
+
+- **Wake-on-LAN: All clients**
+- **Wake-on-LAN: Client** — client slug
+- **Wake-on-LAN: Group** — group slug
+- **Wake-on-LAN: Tag** — tag slug
+
+**Scripts** — take a script slug
+
+- **Script: Run on all clients**
+- **Script: Run on client** — client slug
+- **Script: Run on group** — group slug
+- **Script: Run on tag** — tag slug
+
+**Integrated events** — take an event slug
+
+- **Event: Run on all integrated clients**
+- **Event: Run on client** — client slug
+- **Event: Run on group** — group slug
+- **Event: Run on tag** — tag slug
+
+**Alerts**
+
+- **Alerts: Turn on**
+- **Alerts: Turn off**
+- **Alerts: Toggle**
+
+**Mode**
+
+- **Mode: Enter Show**
+- **Mode: Enter Edit**
+- **Mode: Toggle**
+
+**Modals**
+
+- **Modal: Open client** — client slug
+- **Modal: Close all**
+
+**Server**
+
+- **Save show file**
+- **Shutdown ShowTrak Server** — confirm on by default
+- **Shutdown ShowTrak Server (force, skips prompts)** — confirm on by default
+
+## Feedbacks
+
+- **`client_status`** (advanced) — tile colour + label for a client slug.
+- **`group_status`** (advanced) — aggregate colour + label for a group slug.
+- **`tag_status`** (advanced) — aggregate colour + label for a tag slug.
+- **`all_status`** (advanced) — aggregate colour across every client.
+- **`mode_is`** (boolean) — server is in the selected mode (Show / Edit).
+- **`alerts_enabled`** (boolean) — alert actions are enabled.
+- **`connected`** (boolean) — connected to the server.
+- **`pending_confirm`** (boolean) — a confirm action on this button is armed.
+
+## Variables
+
+- **`connection_state`** — current connection state.
+- **`mode`** — server mode (`SHOW` / `EDIT`).
+- **`alerts_enabled`** — `true` / `false`.
+- **`clients_total`** — total clients.
+- **`clients_online`** — clients online.
+- **`clients_offline`** — clients offline.
+- **`clients_degraded`** — clients degraded.
+- **`client_<slug>_status`** — per-client status (also covers monitors and dummies).
+- **`client_<slug>_label`** — per-client label.
+- **`group_<slug>_status`** — per-group aggregate status.
+- **`group_<slug>_label`** — per-group label.
+- **`tag_<slug>_status`** — per-tag aggregate status.
+- **`tag_<slug>_label`** — per-tag label.
+
 ## Presets
 
-Presets are grouped by target: **Utils** (server-wide controls) first, then one
-section per scope — **Client**, **Group**, **Tag** and **All** — each carrying a
-status tile plus Wake-on-LAN / Script / Event in instant and confirm variants.
+Grouped by target:
 
-- **Client Tile** — shows a client's live status colour and label, and **opens
-  that client's modal on the ShowTrak desktop app when pressed**. Every
-  preset ships with a local `slug` variable already wired into its actions to make programming easier.
-- **Group / Tag / All Tile** — aggregate status colour + label for that scope.
-  Group and Tag tiles use the same button-local `slug`; the All tile needs no slug.
-- **Script / Event / Wake-on-LAN** buttons run on a client, group, tag, or all.
-  Each has a **(confirm)** variant that arms on the first press (turning orange)
-  and executes on a second press within 5 seconds, auto-cancelling otherwise.
+- **Utils** — server-wide controls (alerts, mode, close modals, save show, shutdown).
+- **Client** — status tile + WOL / Script / Event (instant and confirm) + Open modal.
+- **Group** — status tile + WOL / Script / Event (instant and confirm).
+- **Tag** — status tile + WOL / Script / Event (instant and confirm).
+- **All** — status tile + WOL / Script / Event (instant and confirm).
 
-## Feedbacks & variables
-
-- `client_status` (advanced) — tile colour + label from a client slug.
-- `group_status` (advanced) — aggregate group colour + label.
-- `mode_is`, `alerts_enabled`, `connected`, `pending_confirm` — boolean styling.
-- Variables: `connection_state`, `mode`, `alerts_enabled`, client counts, and per
-  client `client_<slug>_status` / `client_<slug>_label`.
-
-## Notes
-
-- **The modal actions** are fire-and-forget commands to the server UI — they have
-  no live feedback.
-- **Shutdown ShowTrak Server** closes the server itself, not a client. Both
-  variants ship with press-to-confirm enabled by default; the plain variant can
-  still be stopped by an unsaved-changes or show-mode prompt on the desktop,
-  while the **force** variant closes regardless. Leave confirm on.
-- **Modal: Open client** and **Modal: Close all** only affect the ShowTrak
-  **desktop app** window. Browsers on the Web UI ignore them, so a Companion
-  press never yanks a modal open (or shut) on someone else's screen.
-- **Save show** saves to the current show file, will open a Save-As dialog on the server if no file is set yet or if unable to write to the show file
+Slugged presets ship with a button-local `slug` variable wired into every action
+and feedback on the button.
