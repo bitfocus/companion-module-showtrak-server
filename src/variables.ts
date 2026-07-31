@@ -33,10 +33,27 @@ function labelVar(prefix: string, slug: string): string {
 }
 
 // Human-readable entity-type word for a variable's display name.
+const TYPE_LABELS: Record<string, string> = {
+	client: 'Client',
+	monitor: 'Monitor',
+	dummy: 'Dummy',
+	freekiosk: 'FreeKiosk',
+}
+
+/**
+ * The display word for an entity type.
+ *
+ * An unrecognised type is title-cased from the wire value rather than falling
+ * back to "Client". A server newer than this module will push entity types it
+ * has never heard of, and labelling a kiosk or whatever comes next as a Client
+ * is wrong, where "Freekiosk" is merely unpolished — and it still tells the
+ * operator what they are looking at.
+ */
 function typeLabel(type: string): string {
-	if (type === 'monitor') return 'Monitor'
-	if (type === 'dummy') return 'Dummy'
-	return 'Client'
+	const Known = TYPE_LABELS[type]
+	if (Known) return Known
+	const Raw = String(type || '').trim()
+	return Raw ? Raw.charAt(0).toUpperCase() + Raw.slice(1) : 'Client'
 }
 
 export function UpdateVariableDefinitions(self: ModuleInstance): void {

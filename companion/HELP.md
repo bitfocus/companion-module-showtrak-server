@@ -99,7 +99,7 @@ press arms the button and a second press within 5 seconds runs it.
 - **`clients_online`** — clients online.
 - **`clients_offline`** — clients offline.
 - **`clients_degraded`** — clients degraded.
-- **`client_<slug>_status`** — per-client status (also covers monitors and dummies).
+- **`client_<slug>_status`** — per-client status (also covers monitoring targets, dummy clients and FreeKiosk terminals).
 - **`client_<slug>_label`** — per-client label.
 - **`group_<slug>_status`** — per-group aggregate status.
 - **`group_<slug>_label`** — per-group label.

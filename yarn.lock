@@ -393,12 +393,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@showtrak/server-sdk@npm:^1.0.3":
-  version: 1.0.3
-  resolution: "@showtrak/server-sdk@npm:1.0.3"
+"@showtrak/server-sdk@npm:^1.1.0":
+  version: 1.1.0
+  resolution: "@showtrak/server-sdk@npm:1.1.0"
   dependencies:
     socket.io-client: "npm:^4.7.5"
-  checksum: 10c0/d35a714f2cc064d287be1fcb05789c3de88866bca249baaf2be25db04b23d74eeb18605394fa44e6a4fad49994fba9dd960a6bd70ada97bb3918d369daa9b3d5
+  checksum: 10c0/0647039773eaf09feafdc0a010c7a704c0837c1b914e450101511aa6408bb96196982e5a855f79887b8a10b0a0d89f2b2313cf7bf66fe1ae6def2becd8f4ed07
   languageName: node
   linkType: hard
 
@@ -755,7 +755,7 @@ __metadata:
   dependencies:
     "@companion-module/base": "npm:2.0.4"
     "@companion-module/tools": "npm:^3.0.1"
-    "@showtrak/server-sdk": "npm:^1.0.3"
+    "@showtrak/server-sdk": "npm:^1.1.0"
     "@types/node": "npm:^22.19.17"
     eslint: "npm:^9.39.4"
     husky: "npm:^9.1.7"
