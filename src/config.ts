@@ -4,6 +4,16 @@ import { DEFAULT_SERVER_PORT } from '@showtrak/server-sdk'
 export type ModuleConfig = {
 	host: string
 	port: number
+	/**
+	 * Declare the per-client telemetry variables (IP, CPU, RAM, uptime,
+	 * warnings). Absent in configs saved by 1.1 and earlier, which reads as on.
+	 */
+	telemetryVariables?: boolean
+}
+
+/** Whether the per-client telemetry variables are wanted (on unless switched off). */
+export function TelemetryVariablesEnabled(config: ModuleConfig | undefined): boolean {
+	return config?.telemetryVariables !== false
 }
 
 // The API key lives in the secrets store, not the config store: Companion reports
@@ -47,6 +57,15 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			label: 'SDK API Key',
 			width: 12,
 			default: '',
+		},
+		{
+			type: 'checkbox',
+			id: 'telemetryVariables',
+			label: 'Client telemetry variables',
+			tooltip:
+				'Adds IP, CPU, RAM, uptime and warning variables for every client. Switch off on very large rigs to keep the variable list short.',
+			width: 12,
+			default: true,
 		},
 	]
 }

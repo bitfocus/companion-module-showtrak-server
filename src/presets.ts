@@ -113,7 +113,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 	const structure: CompanionPresetSection[] = []
 
 	// --- Utils ---------------------------------------------------------------
-	buildUtils(presets)
+	buildUtils(presets, self.label)
 	structure.push({
 		id: 'utils',
 		name: 'Utils',
@@ -127,6 +127,13 @@ export function UpdatePresets(self: ModuleInstance): void {
 			'save_show',
 			'shutdown_server',
 			'shutdown_server_force',
+			'executions_retry_failed',
+			'executions_clear',
+			'view_grid',
+			'view_compact',
+			'view_list',
+			'pending_adoption',
+			'alert_raised',
 		],
 	})
 
@@ -228,9 +235,39 @@ export function UpdatePresets(self: ModuleInstance): void {
 		)
 		defs.push(`event_${s}`, `event_${s}_confirm`)
 
-		// Client only: the Open button, placed last so the row lines up with the
-		// other scopes and the odd-one-out sits at the end.
+		// Script activity ----------------------------------------------------
+		// Display-only: blue while any script or event is running on the scope,
+		// red while the execution panel holds a failure for it.
+		const execOpts = { scope: s, slug: scope.slugged ? SLUG_REF : '', actionSlug: '' }
+		button(
+			presets,
+			`exec_status_${s}`,
+			`Script activity ${scope.name}`,
+			'Scripts',
+			[],
+			DARK,
+			[
+				{ feedbackId: 'script_failed', options: execOpts, style: { bgcolor: RED, color: WHITE } },
+				{ feedbackId: 'script_running', options: execOpts, style: { bgcolor: BLUE, color: WHITE } },
+			],
+			localVars,
+		)
+		defs.push(`exec_status_${s}`)
+
+		// Client only: Identify and the Open button, placed last so the row lines
+		// up with the other scopes and the odd ones out sit at the end.
 		if (s === 'client') {
+			button(
+				presets,
+				'identify_client',
+				'Identify client (toggle)',
+				'Identify',
+				[act('identify_client', { slug: SLUG_REF, state: 'toggle' })],
+				SLATE,
+				[{ feedbackId: 'client_identifying', options: { slug: SLUG_REF }, style: { bgcolor: BLUE, color: WHITE } }],
+				localVars,
+			)
+			defs.push('identify_client')
 			button(
 				presets,
 				'modal_open_client',
@@ -254,11 +291,127 @@ export function UpdatePresets(self: ModuleInstance): void {
 		})
 	}
 
+	// --- Device sections -------------------------------------------------------
+	structure.push(buildFreeKiosk(presets))
+	structure.push(buildMonitor(presets))
+	structure.push(buildDummy(presets))
+
 	self.setPresetDefinitions(structure, presets)
 }
 
+// The client tile, reused by the device sections: monitors, dummies and
+// FreeKiosk terminals share the client slug namespace, so client_status paints
+// them too.
+function deviceTile(presets: Presets, id: string, name: string, title: string): string {
+	return button(
+		presets,
+		id,
+		name,
+		title,
+		[],
+		DARK,
+		[{ feedbackId: 'client_status', options: { slug: SLUG_REF } }],
+		SLUG_LOCAL,
+	)
+}
+
+function buildFreeKiosk(presets: Presets): CompanionPresetSection {
+	const defs = [deviceTile(presets, 'freekiosk_tile', 'FreeKiosk terminal status', 'Kiosk')]
+	const commands: [string, string, string, string, number?][] = [
+		['freekiosk_screen_on', 'Screen on', 'Screen\nOn', 'screen.on'],
+		['freekiosk_screen_off', 'Screen off', 'Screen\nOff', 'screen.off'],
+		['freekiosk_wake', 'Wake screen', 'Wake', 'wake'],
+		['freekiosk_reload', 'Reload page', 'Reload', 'reload'],
+		['freekiosk_brightness_100', 'Brightness 100%', 'Bright\n100%', 'brightness', 100],
+		['freekiosk_brightness_30', 'Brightness 30%', 'Bright\n30%', 'brightness', 30],
+		['freekiosk_beep', 'Beep (find the terminal)', 'Beep', 'audio.beep'],
+	]
+	for (const [id, name, title, commandId, value] of commands) {
+		button(
+			presets,
+			id,
+			`FreeKiosk: ${name}`,
+			title,
+			[
+				act('freekiosk_terminal', {
+					slug: SLUG_REF,
+					commandId,
+					value: value == null ? '' : String(value),
+					confirm: false,
+				}),
+			],
+			TEAL,
+			[],
+			SLUG_LOCAL,
+		)
+		defs.push(id)
+	}
+	button(
+		presets,
+		'freekiosk_reboot',
+		'FreeKiosk: Reboot (confirm)',
+		'Reboot',
+		[act('freekiosk_terminal', { slug: SLUG_REF, commandId: 'reboot', value: '', confirm: true })],
+		RED,
+		[confirmFeedback],
+		SLUG_LOCAL,
+	)
+	defs.push('freekiosk_reboot')
+	return {
+		id: 'freekiosk',
+		name: 'FreeKiosk',
+		description:
+			'Status and commands for one FreeKiosk terminal. Set the button\'s local "slug" variable to the terminal\'s slug.',
+		definitions: defs,
+	}
+}
+
+function buildMonitor(presets: Presets): CompanionPresetSection {
+	const defs = [deviceTile(presets, 'monitor_tile', 'Monitor status', 'Monitor')]
+	button(
+		presets,
+		'monitor_action',
+		'Monitor: Run check action',
+		'Action',
+		[act('monitor_action', { slug: SLUG_REF, method: '', actionId: '', value: '', confirm: false })],
+		SLATE,
+		[],
+		SLUG_LOCAL,
+	)
+	defs.push('monitor_action')
+	return {
+		id: 'monitor',
+		name: 'Monitor',
+		description:
+			'Status and a device action for one monitor. Set the button\'s local "slug" variable, then the action\'s check type and action (e.g. pjlink / power.on).',
+		definitions: defs,
+	}
+}
+
+function buildDummy(presets: Presets): CompanionPresetSection {
+	const defs = [deviceTile(presets, 'dummy_tile', 'Dummy client status', 'Dummy')]
+	button(
+		presets,
+		'dummy_heartbeat',
+		'Dummy: Send heartbeat',
+		'Heart\nbeat',
+		[act('dummy_heartbeat', { slug: SLUG_REF })],
+		GREEN,
+		[],
+		SLUG_LOCAL,
+	)
+	defs.push('dummy_heartbeat')
+	return {
+		id: 'dummy',
+		name: 'Dummy',
+		description:
+			'Status and a heartbeat for one dummy client. Send the heartbeat from a trigger while the device it stands for is healthy.',
+		definitions: defs,
+	}
+}
+
 // Server-wide controls: these target the server itself, so none of them take a slug.
-function buildUtils(presets: Presets): void {
+function buildUtils(presets: Presets, label: string): void {
 	// --- Alerts --------------------------------------------------------------
 	// alerts_toggle starts RED (disabled) and the alerts_enabled feedback repaints
 	// it GREEN while alert actions are on, so the colour always reflects state.
@@ -313,4 +466,57 @@ function buildUtils(presets: Presets): void {
 		RED,
 		[confirmFeedback],
 	)
+
+	// --- Execution panel -----------------------------------------------------
+	// Retry turns RED while anything has failed, so the button that fixes it is
+	// the one that says so. Confirm-armed: it re-runs scripts across the show.
+	button(
+		presets,
+		'executions_retry_failed',
+		'Retry failed scripts',
+		'Retry\nFailed',
+		[act('executions_retry_failed', { confirm: true })],
+		SLATE,
+		[
+			{
+				feedbackId: 'script_failed',
+				options: { scope: 'all', slug: '', actionSlug: '' },
+				style: { bgcolor: RED, color: WHITE },
+			},
+			confirmFeedback,
+		],
+	)
+	button(
+		presets,
+		'executions_clear',
+		'Clear finished executions',
+		'Clear\nFinished',
+		[{ actionId: 'executions_clear', options: {} }],
+		SLATE,
+	)
+
+	// --- View ----------------------------------------------------------------
+	for (const [view, title] of [
+		['grid', 'Grid'],
+		['compact', 'Compact'],
+		['list', 'List'],
+	] as const) {
+		button(presets, `view_${view}`, `View: ${title}`, `View\n${title}`, [act('view_set', { view })], SLATE)
+	}
+
+	// --- Indicators ----------------------------------------------------------
+	// Display-only: orange while devices wait to be adopted, red for ten
+	// seconds after an alert rule raises a ShowTrak alert.
+	button(
+		presets,
+		'pending_adoption',
+		'Devices waiting to be adopted',
+		`Adopt\n$(${label}:pending_adoption_count)`,
+		[],
+		DARK,
+		[{ feedbackId: 'pending_adoption', options: {}, style: { bgcolor: CONFIRM_BG, color: BLACK } }],
+	)
+	button(presets, 'alert_raised', 'Last alert', `Alert\n$(${label}:last_alert_time)`, [], DARK, [
+		{ feedbackId: 'alert_raised', options: { seconds: 10, severity: 'any' }, style: { bgcolor: RED, color: WHITE } },
+	])
 }

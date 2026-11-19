@@ -1,10 +1,11 @@
 import type ModuleInstance from './main.js'
-import type { CommandResult } from '@showtrak/server-sdk'
+import { FREEKIOSK_COMMANDS, type CommandResult, type ViewMode } from '@showtrak/server-sdk'
 
 type SlugOpts = { slug: string }
 type ScriptOpts = { slug: string; scriptSlug: string; confirm: boolean }
 type EventOpts = { slug: string; eventSlug: string; confirm: boolean }
 type ConfirmOnly = { confirm: boolean }
+type KioskOpts = { commandId: string; value: string; confirm: boolean }
 
 export type ActionsSchema = {
 	// Wake-on-LAN
@@ -30,6 +31,23 @@ export type ActionsSchema = {
 	mode_show: { options: Record<string, never> }
 	mode_edit: { options: Record<string, never> }
 	mode_toggle: { options: Record<string, never> }
+	// Identify
+	identify_client: { options: SlugOpts & { state: string } }
+	// Monitoring check actions
+	monitor_action: { options: SlugOpts & { method: string; actionId: string; value: string; confirm: boolean } }
+	// FreeKiosk terminals
+	freekiosk_terminal: { options: SlugOpts & KioskOpts }
+	freekiosk_group: { options: SlugOpts & KioskOpts }
+	freekiosk_tag: { options: SlugOpts & KioskOpts }
+	freekiosk_all: { options: KioskOpts }
+	// Dummy clients
+	dummy_heartbeat: { options: SlugOpts }
+	// Execution panel
+	executions_retry_failed: { options: ConfirmOnly }
+	executions_clear: { options: Record<string, never> }
+	// Client-list layout
+	view_set: { options: { view: string } }
+	view_toggle_compact: { options: Record<string, never> }
 	// Modals (desktop app only)
 	modal_open_client: { options: SlugOpts }
 	modal_close_all: { options: Record<string, never> }
@@ -64,6 +82,44 @@ const confirm = {
 	label: 'Require press-to-confirm (5s timeout)',
 	default: false,
 } as const
+
+// FreeKiosk commands from the SDK's catalog. allowCustom keeps a command the
+// server gains after this module was built sendable by its ID; the server checks
+// every one against its own allowlist regardless.
+const kioskCommand = {
+	id: 'commandId',
+	type: 'dropdown',
+	label: 'Command',
+	default: 'screen.on',
+	allowCustom: true,
+	choices: FREEKIOSK_COMMANDS.map((Command) => ({
+		id: Command.ID,
+		label: Command.Value
+			? `${Command.Group}: ${Command.Label} (${Command.Value.Min}-${Command.Value.Max})`
+			: `${Command.Group}: ${Command.Label}`,
+	})),
+} as const
+const kioskValue = {
+	id: 'value',
+	type: 'textinput',
+	label: 'Value (Brightness and Volume only, 0-100)',
+	default: '',
+	useVariables: true,
+} as const
+
+// An optional free-text option as a string: blank when unset. A number (from an
+// expression) is kept; anything else is not a value an action can send.
+function optionText(value: unknown): string {
+	if (typeof value === 'string') return value
+	if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+	return ''
+}
+
+const VIEW_CHOICES: { id: ViewMode; label: string }[] = [
+	{ id: 'grid', label: 'Grid' },
+	{ id: 'compact', label: 'Compact' },
+	{ id: 'list', label: 'List' },
+]
 
 export function UpdateActions(self: ModuleInstance): void {
 	// Simple fire-and-forget action.
@@ -155,6 +211,142 @@ export function UpdateActions(self: ModuleInstance): void {
 		mode_show: { name: 'Mode: Enter Show', options: [], callback: simple(async () => self.control.enterShowMode()) },
 		mode_edit: { name: 'Mode: Enter Edit', options: [], callback: simple(async () => self.control.enterEditMode()) },
 		mode_toggle: { name: 'Mode: Toggle', options: [], callback: simple(async () => self.control.toggleMode()) },
+
+		// --- Identify ---
+		// Flashes an overlay on the client's own screen. Safe in Show mode: it
+		// changes nothing, and finding a machine in a rack is a show-time job.
+		identify_client: {
+			name: 'Identify: Client',
+			options: [
+				{ ...slug, label: 'Client slug' },
+				{
+					id: 'state',
+					type: 'dropdown',
+					label: 'Identify',
+					default: 'toggle',
+					choices: [
+						{ id: 'on', label: 'Start' },
+						{ id: 'off', label: 'Stop' },
+						{ id: 'toggle', label: 'Toggle' },
+					],
+				},
+			],
+			callback: async (e) => {
+				const Slug = String(e.options.slug)
+				const State = String(e.options.state)
+				const Start = State === 'on' || (State === 'toggle' && !self.control.getClient(Slug)?.Identifying)
+				self.logResult(await (Start ? self.control.identify(Slug) : self.control.stopIdentify(Slug)))
+			},
+		},
+
+		// --- Monitoring check actions ---
+		// The same verbs as the server's OSC /API/Monitor/<slug>/<method>/<action>
+		// routes; the server's OSC/API reference lists every method and action.
+		monitor_action: {
+			name: 'Monitor: Run check action',
+			description: 'Runs a device action on a monitor, e.g. method "pjlink", action "power.on".',
+			options: [
+				{ ...slug, label: 'Monitor slug' },
+				{
+					id: 'method',
+					type: 'textinput',
+					label: 'Check type (method), e.g. pjlink',
+					default: '',
+					useVariables: true,
+				},
+				{
+					id: 'actionId',
+					type: 'textinput',
+					label: 'Action, e.g. power.on or input.set',
+					default: '',
+					useVariables: true,
+				},
+				{
+					id: 'value',
+					type: 'textinput',
+					label: "Value (for actions that take one; fills the action's first setting)",
+					default: '',
+					useVariables: true,
+				},
+				confirm,
+			],
+			callback: confirmable(async (o) =>
+				self.control.runActionOnMonitor(
+					String(o.slug),
+					String(o.method).trim(),
+					String(o.actionId).trim(),
+					optionText(o.value),
+				),
+			),
+		},
+
+		// --- FreeKiosk terminals ---
+		freekiosk_terminal: {
+			name: 'FreeKiosk: Command a terminal',
+			options: [{ ...slug, label: 'Terminal slug' }, kioskCommand, kioskValue, confirm],
+			callback: confirmable(async (o) =>
+				self.control.runFreeKioskCommandOnTerminal(String(o.slug), String(o.commandId), optionText(o.value)),
+			),
+		},
+		freekiosk_group: {
+			name: 'FreeKiosk: Command every terminal in a group',
+			options: [{ ...slug, label: 'Group slug' }, kioskCommand, kioskValue, confirm],
+			callback: confirmable(async (o) =>
+				self.control.runFreeKioskCommandOnGroup(String(o.slug), String(o.commandId), optionText(o.value)),
+			),
+		},
+		freekiosk_tag: {
+			name: 'FreeKiosk: Command every terminal in a tag',
+			options: [{ ...slug, label: 'Tag slug' }, kioskCommand, kioskValue, confirm],
+			callback: confirmable(async (o) =>
+				self.control.runFreeKioskCommandOnTag(String(o.slug), String(o.commandId), optionText(o.value)),
+			),
+		},
+		freekiosk_all: {
+			name: 'FreeKiosk: Command every terminal',
+			options: [kioskCommand, kioskValue, confirm],
+			callback: confirmable(async (o) =>
+				self.control.runFreeKioskCommandOnAll(String(o.commandId), optionText(o.value)),
+			),
+		},
+
+		// --- Dummy clients ---
+		// For a device Companion can see but ShowTrak cannot: send this from a
+		// trigger while the device is healthy, and the dummy reads online.
+		dummy_heartbeat: {
+			name: 'Dummy: Send heartbeat',
+			options: [{ ...slug, label: 'Dummy slug' }],
+			callback: async (e) => self.logResult(await self.control.sendDummyHeartbeat(String(e.options.slug))),
+		},
+
+		// --- Execution panel ---
+		executions_retry_failed: {
+			name: 'Executions: Retry failed',
+			description: 'Runs every failed script and integrated event in the execution panel again.',
+			options: [confirm],
+			callback: confirmable(async () => self.control.retryFailedExecutions()),
+		},
+		executions_clear: {
+			name: 'Executions: Clear finished',
+			description: 'Clears completed and failed rows from the execution panel. Anything still running stays.',
+			options: [],
+			callback: simple(async () => self.control.clearSettledExecutions()),
+		},
+
+		// --- Client-list layout (the desktop and every Web UI browser) ---
+		view_set: {
+			name: 'View: Set layout',
+			options: [{ id: 'view', type: 'dropdown', label: 'Layout', default: 'grid', choices: VIEW_CHOICES }],
+			callback: async (e) => {
+				const View = VIEW_CHOICES.find((Choice) => Choice.id === e.options.view)?.id ?? 'grid'
+				self.logResult(await self.control.setView(View))
+			},
+		},
+		view_toggle_compact: {
+			name: 'View: Toggle compact',
+			options: [],
+			callback: simple(async () => self.control.toggleView()),
+		},
 
 		// --- Modals (desktop app only; the ShowTrak web UI ignores these) ---
 		modal_open_client: {

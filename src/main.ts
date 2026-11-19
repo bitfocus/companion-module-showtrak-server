@@ -3,9 +3,30 @@ import { GetConfigFields, type ModuleConfig, type ModuleSecrets } from './config
 import { UpdateVariableDefinitions, RefreshVariableValues, type VariablesSchema } from './variables.js'
 import { UpgradeScripts } from './upgrades.js'
 import { UpdateActions, type ActionsSchema } from './actions.js'
-import { UpdateFeedbacks, type FeedbacksSchema } from './feedbacks.js'
+import { UpdateFeedbacks, MAX_ALERT_HOLD_SECONDS, type FeedbacksSchema } from './feedbacks.js'
 import { UpdatePresets } from './presets.js'
-import { ShowTrakControlClient, type CommandResult } from '@showtrak/server-sdk'
+import { ShowTrakControlClient, type CommandResult, type ShowTrakAlert } from '@showtrak/server-sdk'
+
+type FeedbackId = keyof FeedbacksSchema
+
+// How long a burst of server pushes is folded into one refresh. The SDK fires a
+// change event per client update, several a second on a busy show; redrawing
+// every variable and tile per event costs Companion far more than a tenth of a
+// second of latency costs an operator.
+const REFRESH_COALESCE_MS = 100
+
+// Tile feedbacks that read a client's status, label or membership.
+const CLIENT_FEEDBACKS: FeedbackId[] = [
+	'client_status',
+	'group_status',
+	'tag_status',
+	'all_status',
+	'client_status_is',
+	'client_identifying',
+	// Group and tag scopes resolve their members from the client list.
+	'script_running',
+	'script_failed',
+]
 
 export type ModuleSchema = {
 	config: ModuleConfig
@@ -31,6 +52,19 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	// that disarms it after ~5s.
 	readonly confirmPending = new Map<string, ReturnType<typeof setTimeout>>()
 
+	/** The most recent ShowTrak alert, with when it arrived (epoch ms). */
+	lastAlert: (ShowTrakAlert & { At: number }) | null = null
+
+	/** Variable values as last sent, so only changes go to Companion. See variables.ts. */
+	readonly sentVariableValues = new Map<string, string | number>()
+	/** The variable set as last declared, so it is re-declared only when it changes. */
+	declaredVariablesKey = ''
+
+	private refreshTimer: ReturnType<typeof setTimeout> | null = null
+	private readonly pendingFeedbacks = new Set<FeedbackId>()
+	private pendingVariables = false
+	private alertTicker: ReturnType<typeof setInterval> | null = null
+
 	constructor(internal: unknown) {
 		super(internal)
 	}
@@ -54,12 +88,18 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	async destroy(): Promise<void> {
 		for (const timer of this.confirmPending.values()) clearTimeout(timer)
 		this.confirmPending.clear()
+		if (this.refreshTimer) clearTimeout(this.refreshTimer)
+		this.refreshTimer = null
+		this.stopAlertTicker()
 		this.control.disconnect()
 	}
 
 	async configUpdated(config: ModuleConfig, secrets: ModuleSecrets): Promise<void> {
 		this.config = config
 		this.secrets = secrets
+		// The telemetry switch changes which variables exist.
+		this.updateVariableDefinitions()
+		RefreshVariableValues(this)
 		this.connect()
 	}
 
@@ -86,6 +126,10 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	}
 
 	// Subscribe once to the client's change events; these survive reconnects.
+	//
+	// Every handler goes through scheduleRefresh rather than redrawing on the
+	// spot: one coalesced pass re-declares variables if the entity set changed,
+	// sends only the values that did, and re-checks each affected feedback once.
 	private wireControlEvents(): void {
 		this.control.on('stateChanged', (state) => {
 			switch (state) {
@@ -101,35 +145,64 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 				default:
 					this.updateStatus(InstanceStatus.Disconnected)
 			}
-			this.checkFeedbacks('connected')
-			RefreshVariableValues(this)
+			this.scheduleRefresh(['connected'])
 		})
 		this.control.on('error', (message) => this.log('warn', `Control API: ${message}`))
-		this.control.on('clientsChanged', () => {
-			// Client and group sets arrive together → (re)declare per-client and
-			// per-group variables, then refresh values and the tile feedbacks that
-			// read status/label by slug.
+		// Client and group sets arrive together. Client status also rolls up into
+		// the group/tag/all aggregate tiles.
+		this.control.on('clientsChanged', () => this.scheduleRefresh(CLIENT_FEEDBACKS))
+		// A tag's membership (Scope) may have changed.
+		this.control.on('tagsChanged', () => this.scheduleRefresh(['tag_status', 'script_running', 'script_failed']))
+		this.control.on('modeChanged', () => this.scheduleRefresh(['mode_is']))
+		this.control.on('alertsChanged', () => this.scheduleRefresh(['alerts_enabled']))
+		this.control.on('scriptsChanged', () => this.scheduleRefresh([]))
+		this.control.on('scriptExecutionsChanged', () => this.scheduleRefresh(['script_running', 'script_failed']))
+		this.control.on('pendingAdoptionChanged', () => this.scheduleRefresh(['pending_adoption']))
+		this.control.on('alert', (alert) => {
+			this.lastAlert = { ...alert, At: Date.now() }
+			this.startAlertTicker()
+			this.scheduleRefresh(['alert_raised'])
+		})
+	}
+
+	/**
+	 * Queue a variable refresh and a re-check of these feedbacks, folding a burst
+	 * of server pushes into one pass. See REFRESH_COALESCE_MS.
+	 */
+	scheduleRefresh(feedbacks: FeedbackId[], variables = true): void {
+		for (const Id of feedbacks) this.pendingFeedbacks.add(Id)
+		if (variables) this.pendingVariables = true
+		if (this.refreshTimer) return
+		this.refreshTimer = setTimeout(() => this.flushRefresh(), REFRESH_COALESCE_MS)
+	}
+
+	private flushRefresh(): void {
+		this.refreshTimer = null
+		if (this.pendingVariables) {
+			this.pendingVariables = false
 			this.updateVariableDefinitions()
 			RefreshVariableValues(this)
-			// Client status also rolls up into the group/tag/all aggregate tiles.
-			this.checkFeedbacks('client_status', 'group_status', 'tag_status', 'all_status')
-		})
-		this.control.on('tagsChanged', () => {
-			// A tag's membership (Scope) may have changed → (re)declare per-tag
-			// variables, refresh their values, then repaint the tag tiles.
-			this.updateVariableDefinitions()
-			RefreshVariableValues(this)
-			this.checkFeedbacks('tag_status')
-		})
-		this.control.on('modeChanged', () => {
-			RefreshVariableValues(this)
-			this.checkFeedbacks('mode_is')
-		})
-		this.control.on('alertsChanged', () => {
-			RefreshVariableValues(this)
-			this.checkFeedbacks('alerts_enabled')
-		})
-		this.control.on('scriptsChanged', () => RefreshVariableValues(this))
+		}
+		const Ids = [...this.pendingFeedbacks]
+		this.pendingFeedbacks.clear()
+		if (Ids.length) this.checkFeedbacks(Ids[0], ...Ids.slice(1))
+	}
+
+	// "Alert raised" holds for a number of seconds the operator chooses, so it has
+	// to be re-checked as time passes, not only when something arrives. A one
+	// second tick runs only while the last alert is recent enough to matter.
+	private startAlertTicker(): void {
+		if (this.alertTicker) return
+		this.alertTicker = setInterval(() => {
+			const Age = this.lastAlert ? Date.now() - this.lastAlert.At : Infinity
+			this.checkFeedbacks('alert_raised')
+			if (Age > MAX_ALERT_HOLD_SECONDS * 1000) this.stopAlertTicker()
+		}, 1000)
+	}
+
+	private stopAlertTicker(): void {
+		if (this.alertTicker) clearInterval(this.alertTicker)
+		this.alertTicker = null
 	}
 
 	// Log a command's outcome (used by every action callback).
